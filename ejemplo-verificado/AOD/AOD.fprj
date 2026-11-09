@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FaceProject DeviceType="366" Id="167210065">
+    <Screen Title="Analog Full AOD" Bitmap="preview.png">
+        <Widget Shape="30" Name="bg" Bitmap="aod_bg.png" X="0" Y="0" Width="192" Height="490" Alpha="255" Visible_Src="0"/>
+        <Widget Shape="31" Name="weekday" BitmapList="(0):wd_0.png|(1):wd_1.png|(2):wd_2.png|(3):wd_3.png|(4):wd_4.png|(5):wd_5.png|(6):wd_6.png" X="22" Y="30" Width="68" Height="60" Alpha="255" Alignment="1" DefaultIndex="0" Index_Src="2012" Spacing="0" Blanking="0" Visible_Src="0"/>
+        <Widget Shape="32" Name="day" BitmapList="dd_0.png|dd_1.png|dd_2.png|dd_3.png|dd_4.png|dd_5.png|dd_6.png|dd_7.png|dd_8.png|dd_9.png" X="102" Y="30" Width="68" Height="60" Alpha="255" Visible_Src="0" Digits="2" Alignment="1" Value_Src="1812" Spacing="0" Blanking="1"/>
+        <Widget Shape="27" Name="analog_clock" X="0" Y="0" Width="192" Height="490" Alpha="255" Visible_Src="0" HourHandCorrection_En="1" MinuteHandCorrection_En="1" Background_ImageName="clock_bg.png" BgImage_rotate_xc="96" BgImage_rotate_yc="245" HourHand_ImageName="aod_hour.png" HourImage_rotate_xc="96" HourImage_rotate_yc="245" MinuteHand_Image="aod_minute.png" MinuteImage_rotate_xc="96" MinuteImage_rotate_yc="245" SecondHand_Image="empty.png" SecondImage_rotate_xc="96" SecondImage_rotate_yc="245"/>
+        <Widget Shape="30" Name="center_cap" Bitmap="aod_cap.png" X="0" Y="0" Width="192" Height="490" Alpha="255" Visible_Src="0"/>
+    </Screen>
+</FaceProject>

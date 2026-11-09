@@ -1,0 +1,25 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Compiler scaffolding / working dirs (Wine build)
+/output/
+/app/
+/AOD/output/
+"\\output\\AnalogFull.info"
+
+# Stray / generated render outputs — the real assets live in images/ and tools/
+/assets/
+/AnalogFull/
+/assets_b64.json
+/layout.json
+/preview.png
+/preview_3x.png
+tools/preview_aod_3x.png
+
+# Duplicate of the canonical compiled artifact (AnalogFull.face)
+/AnalogFull.bin
+
+# macOS
+.DS_Store

@@ -1,0 +1,22 @@
+# Proyecto / arte local (no forma parte del kit público)
+luffy-linternas/
+watchface_luffy_assets/
+Cielo*.png
+Pack de recursos*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Generados / temporales
+miband9-face-packer/samples/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# IDE local (mantener rules versionadas; ignorar cachés)
+.cursor/plans/
+.claude/settings.local.json

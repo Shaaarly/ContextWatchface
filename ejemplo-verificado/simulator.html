@@ -1,0 +1,308 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi Create · Face Simulator</title>
+<style>
+  body { margin:0; min-height:100vh; background:#0d0d10; color:#e7e7ea;
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    display:flex; flex-direction:column; align-items:center; gap:18px; padding:32px 16px 56px; box-sizing:border-box; }
+  h1 { font-size:18px; font-weight:600; margin:0; }
+  .sub { color:#8a8a92; font-size:12.5px; margin:-10px 0 0; }
+  .band { padding:14px; border-radius:38px; background:linear-gradient(155deg,#2a2a30,#141417);
+    box-shadow:0 22px 60px rgba(0,0,0,.6), inset 0 0 0 1px #3a3a42; }
+  .screen { border-radius:26px; overflow:hidden; background:#000; }
+  canvas { width:100%; height:100%; display:block; }
+  .digi { font-variant-numeric:tabular-nums; font-size:15px; color:#bfbfc6; }
+  .digi b { color:#fff; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; align-items:center; max-width:560px; }
+  button { background:#1c1c22; color:#e7e7ea; border:1px solid #34343c; border-radius:10px;
+    padding:8px 14px; font-size:13px; cursor:pointer; }
+  button:hover { background:#26262e; }
+  button.on { background:#2563eb; border-color:#2563eb; color:#fff; }
+  label { display:inline-flex; align-items:center; gap:6px; color:#8a8a92; font-size:12.5px; }
+  input[type=number] { width:64px; background:#16161b; color:#e7e7ea; border:1px solid #34343c;
+    border-radius:8px; padding:6px 8px; font-size:13px; }
+  .meta { max-width:560px; text-align:center; color:#7d7d86; font-size:12px; }
+  .meta code { color:#a8a8b2; }
+  .warn { color:#e0b341; }
+</style>
+
+<h1>Mi Create · Face Simulator</h1>
+<p class="sub" id="sub">Universal Mi Create project renderer — draws widgets from real assets</p>
+
+<div class="band"><div class="screen" id="screen"><canvas id="c"></canvas></div></div>
+<div class="digi" id="digi">--:--:--</div>
+
+<div class="row">
+  <button id="live" class="on">● Real time</button>
+  <button id="demo">Demo</button>
+  <label>Battery <input id="bat" type="number" min="0" max="100" value="84"></label>
+  <label>Steps <input id="steps" type="number" min="0" max="99999" value="8432"></label>
+  <button id="load">Load .fprj…</button>
+  <input id="file" type="file" accept=".fprj,.xml" hidden>
+</div>
+
+<p class="meta" id="meta"></p>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------------------
+ * Universal Mi Create watchface engine.
+ * Nothing is hardcoded for a specific project: everything is drawn from the
+ * widget attributes in the .fprj and the real bitmap assets.
+ *
+ * To view another watchface: "Load .fprj…" or just place this file next to
+ * your own project and open it via a local server.
+ * Images are taken from ./images/<name> (the standard Mi Create layout).
+ * ------------------------------------------------------------------------- */
+
+const IMG_BASE = "images/";
+const SCALE = 1.6;                          // zoom factor for easier viewing
+const DEVICE = { 366: [192, 490] };         // DeviceType -> [screen width, height]
+const DEMO_DATE = new Date(2024, 5, 11, 10, 9, 36);  // deterministic "Demo"
+
+/* Device data sources (Src-id -> value).
+ * This is the only piece of "platform knowledge" and it is generic — not about a specific watchface.
+ * If your device has a different source numbering, edit only this table. */
+const SOURCES = {
+  // Mi Band 9 (the xiaomi_band_9 table in sources.json):
+  1812: d => d.getDate(),                    // day of month 1..31 (Day)
+  2012: d => d.getDay(),                     // day of week 0..6 (0=Sun) (Week). Change if your device uses Mon=0
+  841:  () => state.battery,                 // battery, % (Battery percent; "0841" → 841)
+  // Generic xiaomi_color (for other watchfaces; read as 0 on Band 9):
+  11: d => d.getDate(),                      // day of month 1..31
+  12: d => d.getDay(),                       // day of week 0..6 (0=Sun). Change if your device uses Mon=0
+  20: () => state.battery,                   // battery, %
+  23: () => state.steps,                     // steps
+};
+function srcValue(id, d) { const f = SOURCES[id]; return f ? f(d) : 0; }
+
+const state = { live: true, battery: 84, steps: 8432 };
+
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+const screen = document.getElementById("screen");
+const digi = document.getElementById("digi");
+const meta = document.getElementById("meta");
+
+let PROJECT = null;   // { deviceType, widgets:[{...attrs}] }
+let IMG = {};         // filename -> HTMLImageElement
+let W = 192, H = 490;
+let running = false;
+
+/* ---- project parsing --------------------------------------------------- */
+function parseProject(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, "application/xml");
+  if (doc.querySelector("parsererror")) throw new Error("Failed to parse project XML");
+  const fp = doc.querySelector("FaceProject");
+  const deviceType = +((fp && fp.getAttribute("DeviceType")) || 0);
+  const widgets = [...doc.querySelectorAll("Widget")].map(node => {
+    const a = {};
+    for (const at of node.attributes) a[at.name] = at.value;
+    return a;
+  });
+  return { deviceType, widgets };
+}
+
+/* all image names referenced by the project */
+function imageNames(widgets) {
+  const set = new Set();
+  const keys = ["Bitmap", "Background_ImageName", "HourHand_ImageName",
+                "MinuteHand_Image", "SecondHand_Image"];
+  for (const w of widgets) {
+    for (const k of keys) if (w[k]) set.add(w[k]);
+    // BitmapList entries may carry an explicit "(N):file.png" prefix (Shape 31) —
+    // strip it so the loader gets the real filename.
+    if (w.BitmapList) w.BitmapList.split("|").forEach(s => {
+      if (!s) return;
+      const m = s.match(/^\((\d+)\):(.+)$/);
+      set.add(m ? m[2] : s);
+    });
+  }
+  return [...set];
+}
+
+function loadImages(names) {
+  const missing = [];
+  return Promise.all(names.map(name => new Promise(res => {
+    const im = new Image();
+    im.onload  = () => { IMG[name] = im; res(); };
+    im.onerror = () => { missing.push(name); res(); };
+    im.src = IMG_BASE + name;
+  }))).then(() => missing);
+}
+
+/* ---- drawing ----------------------------------------------------------- */
+// horizontal alignment of a block of width blockW within the field [x, x+fieldW]
+function alignX(x, fieldW, blockW, align) {
+  if (align === 1) return x + (fieldW - blockW) / 2;   // center
+  if (align === 2) return x + fieldW - blockW;         // right
+  return x;                                            // left (0)
+}
+
+function drawHand(im, deg, xc, yc) {
+  if (!im) return;
+  ctx.save();
+  ctx.translate(xc, yc);
+  ctx.rotate(deg * Math.PI / 180);
+  ctx.drawImage(im, -xc, -yc);   // the image pivot (xc,yc) is aligned with the rotation center
+  ctx.restore();
+}
+
+function drawAnalog(w, d) {
+  const bg = IMG[w.Background_ImageName];
+  if (bg) ctx.drawImage(bg, 0, 0);
+
+  const h = d.getHours(), m = d.getMinutes(), s = d.getSeconds(), ms = d.getMilliseconds();
+  const hourCorr = +(w.HourHandCorrection_En || 0) === 1;   // hour hand creeps along with the minutes
+  const minCorr  = +(w.MinuteHandCorrection_En || 0) === 1; // minute hand — with the seconds
+
+  const hourDeg = ((h % 12) + (hourCorr ? m / 60 : 0)) * 30;
+  const minDeg  = (m + (minCorr ? s / 60 : 0)) * 6;
+  const secDeg  = (s + ms / 1000) * 6;
+
+  drawHand(IMG[w.HourHand_ImageName], hourDeg, +w.HourImage_rotate_xc, +w.HourImage_rotate_yc);
+  drawHand(IMG[w.MinuteHand_Image],   minDeg,  +w.MinuteImage_rotate_xc, +w.MinuteImage_rotate_yc);
+  drawHand(IMG[w.SecondHand_Image],   secDeg,  +w.SecondImage_rotate_xc, +w.SecondImage_rotate_yc);
+}
+
+// multi-digit number from bitmap glyphs (Shape 32)
+function drawNumber(w, d) {
+  const glyphs = (w.BitmapList || "").split("|").filter(Boolean);
+  const digits = +(w.Digits || 1);
+  const blanking = +(w.Blanking || 0) === 1;   // blank leading zeros
+  const spacing = +(w.Spacing || 0);
+  const align = +(w.Alignment || 0);
+
+  let str = String(Math.max(0, Math.floor(srcValue(+w.Value_Src, d))));
+  if (str.length > digits) str = str.slice(-digits);
+  else if (!blanking) str = str.padStart(digits, "0");
+
+  const ims = [...str].map(ch => IMG[glyphs[+ch]]).filter(Boolean);
+  if (!ims.length) return;
+
+  const total = ims.reduce((s, im) => s + im.naturalWidth, 0) + spacing * (ims.length - 1);
+  let x = alignX(+w.X || 0, +w.Width || 0, total, align);
+  const y = +w.Y || 0;
+  for (const im of ims) { ctx.drawImage(im, x, y); x += im.naturalWidth + spacing; }
+}
+
+// a single image from a list by index (Shape 31)
+// Entries may have an explicit "(N):file.png" prefix — then N sets the index
+// by which the file is selected (Index_Src=value → the file with that N).
+// Without a prefix — a positional index (by order in the list).
+function drawIndexed(w, d) {
+  const raw = (w.BitmapList || "").split("|").filter(Boolean);
+  if (!raw.length) return;
+  const explicit = {};        // N -> filename, if prefixes are given
+  const positional = [];      // filenames in order (fallback path)
+  let hasExplicit = false;
+  for (const s of raw) {
+    const m = s.match(/^\((\d+)\):(.+)$/);
+    if (m) { explicit[+m[1]] = m[2]; hasExplicit = true; }
+    else positional.push(s);
+  }
+  let idx = (w.Index_Src != null) ? srcValue(+w.Index_Src, d) : +(w.DefaultIndex || 0);
+  idx = Math.floor(idx);
+  let name;
+  if (hasExplicit) {
+    name = explicit[idx];     // selection by explicit index
+  } else {
+    const wrapped = ((idx % positional.length) + positional.length) % positional.length;
+    name = positional[wrapped];
+  }
+  const im = name ? IMG[name] : null;
+  if (!im) return;
+  const x = alignX(+w.X || 0, +w.Width || 0, im.naturalWidth, +(w.Alignment || 0));
+  ctx.drawImage(im, x, +w.Y || 0);
+}
+
+function drawWidget(w, d) {
+  switch (+w.Shape) {
+    case 30: { const im = IMG[w.Bitmap]; if (im) ctx.drawImage(im, +w.X || 0, +w.Y || 0); break; }
+    case 31: drawIndexed(w, d); break;
+    case 32: drawNumber(w, d); break;
+    case 27: drawAnalog(w, d); break;
+    // unknown shapes are silently skipped — the engine stays extensible
+  }
+}
+
+function frame() {
+  const d = state.live ? new Date() : DEMO_DATE;
+  ctx.clearRect(0, 0, W, H);
+  if (PROJECT) for (const w of PROJECT.widgets) drawWidget(w, d);   // widget order = z-order
+  const p = v => String(v).padStart(2, "0");
+  digi.innerHTML = `<b>${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}</b>`;
+  requestAnimationFrame(frame);   // smooth second hand
+}
+
+function setupCanvas() {
+  cv.width = W; cv.height = H;
+  screen.style.width = (W * SCALE) + "px";
+  screen.style.height = (H * SCALE) + "px";
+}
+
+async function boot(xmlText) {
+  PROJECT = parseProject(xmlText);
+  IMG = {};
+  const missing = await loadImages(imageNames(PROJECT.widgets));
+
+  const dev = DEVICE[PROJECT.deviceType];
+  if (dev) { [W, H] = dev; }
+  else {
+    const any = Object.values(IMG)[0];        // fallback: size from the background image
+    W = any ? any.naturalWidth : 192;
+    H = any ? any.naturalHeight : 490;
+  }
+  setupCanvas();
+
+  const n = PROJECT.widgets.length;
+  meta.innerHTML = `Mi Create engine · device <code>${PROJECT.deviceType}</code> · ${W}×${H} · widgets: ${n}. ` +
+    `Numerals and weekday are drawn with the project's real bitmaps; hands and correction — as in the <code>.fprj</code>.` +
+    (missing.length ? ` <span class="warn">Missing assets: ${missing.join(", ")}</span>` : "");
+
+  if (!running) { running = true; requestAnimationFrame(frame); }
+}
+
+/* ---- controls ---------------------------------------------------------- */
+const bLive = document.getElementById("live");
+const bDemo = document.getElementById("demo");
+bLive.onclick = () => { state.live = true;  bLive.classList.add("on");  bDemo.classList.remove("on"); };
+bDemo.onclick = () => { state.live = false; bDemo.classList.add("on");  bLive.classList.remove("on"); };
+
+document.getElementById("bat").oninput   = e => { state.battery = +e.target.value || 0; };
+document.getElementById("steps").oninput = e => { state.steps   = +e.target.value || 0; };
+
+const fileInput = document.getElementById("file");
+document.getElementById("load").onclick = () => fileInput.click();
+fileInput.onchange = () => {
+  const f = fileInput.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => boot(r.result).catch(err => { meta.innerHTML = `<span class="warn">${err.message}</span>`; });
+  r.readAsText(f);
+};
+
+/* ---- start: try the real .fprj, otherwise the embedded copy ------------ */
+const DEFAULT_FPRJ = `<?xml version="1.0" encoding="UTF-8"?>
+<FaceProject DeviceType="366" Id="167210065">
+    <Screen Title="Analog Full" Bitmap="preview.png">
+        <Widget Shape="30" Name="bg" Bitmap="background.png" X="0" Y="0" Width="192" Height="490" Alpha="255" Visible_Src="0"/>
+        <Widget Shape="31" Name="weekday" BitmapList="(0):wd_0.png|(1):wd_1.png|(2):wd_2.png|(3):wd_3.png|(4):wd_4.png|(5):wd_5.png|(6):wd_6.png" X="22" Y="30" Width="68" Height="60" Alpha="255" Alignment="1" DefaultIndex="0" Index_Src="2012" Spacing="0" Blanking="0" Visible_Src="0"/>
+        <Widget Shape="32" Name="day" BitmapList="dd_0.png|dd_1.png|dd_2.png|dd_3.png|dd_4.png|dd_5.png|dd_6.png|dd_7.png|dd_8.png|dd_9.png" X="102" Y="30" Width="68" Height="60" Alpha="255" Visible_Src="0" Digits="2" Alignment="1" Value_Src="1812" Spacing="0" Blanking="1"/>
+        <Widget Shape="31" Name="battery" BitmapList="(0):b_0.png|(1):b_1.png|(2):b_2.png|(3):b_3.png|(4):b_4.png|(5):b_5.png|(6):b_6.png|(7):b_7.png|(8):b_8.png|(9):b_9.png|(10):b_10.png|(11):b_11.png|(12):b_12.png|(13):b_13.png|(14):b_14.png|(15):b_15.png|(16):b_16.png|(17):b_17.png|(18):b_18.png|(19):b_19.png|(20):b_20.png|(21):b_21.png|(22):b_22.png|(23):b_23.png|(24):b_24.png|(25):b_25.png|(26):b_26.png|(27):b_27.png|(28):b_28.png|(29):b_29.png|(30):b_30.png|(31):b_31.png|(32):b_32.png|(33):b_33.png|(34):b_34.png|(35):b_35.png|(36):b_36.png|(37):b_37.png|(38):b_38.png|(39):b_39.png|(40):b_40.png|(41):b_41.png|(42):b_42.png|(43):b_43.png|(44):b_44.png|(45):b_45.png|(46):b_46.png|(47):b_47.png|(48):b_48.png|(49):b_49.png|(50):b_50.png|(51):b_51.png|(52):b_52.png|(53):b_53.png|(54):b_54.png|(55):b_55.png|(56):b_56.png|(57):b_57.png|(58):b_58.png|(59):b_59.png|(60):b_60.png|(61):b_61.png|(62):b_62.png|(63):b_63.png|(64):b_64.png|(65):b_65.png|(66):b_66.png|(67):b_67.png|(68):b_68.png|(69):b_69.png|(70):b_70.png|(71):b_71.png|(72):b_72.png|(73):b_73.png|(74):b_74.png|(75):b_75.png|(76):b_76.png|(77):b_77.png|(78):b_78.png|(79):b_79.png|(80):b_80.png|(81):b_81.png|(82):b_82.png|(83):b_83.png|(84):b_84.png|(85):b_85.png|(86):b_86.png|(87):b_87.png|(88):b_88.png|(89):b_89.png|(90):b_90.png|(91):b_91.png|(92):b_92.png|(93):b_93.png|(94):b_94.png|(95):b_95.png|(96):b_96.png|(97):b_97.png|(98):b_98.png|(99):b_99.png|(100):b_100.png" X="40" Y="420" Width="112" Height="60" Alpha="255" Alignment="1" DefaultIndex="84" Index_Src="0841" Spacing="0" Blanking="0" Visible_Src="0"/>
+        <Widget Shape="27" Name="analog_clock" X="0" Y="0" Width="192" Height="490" Alpha="255" Visible_Src="0" HourHandCorrection_En="1" MinuteHandCorrection_En="1" Background_ImageName="clock_bg.png" BgImage_rotate_xc="96" BgImage_rotate_yc="245" HourHand_ImageName="hand_hour.png" HourImage_rotate_xc="96" HourImage_rotate_yc="245" MinuteHand_Image="hand_minute.png" MinuteImage_rotate_xc="96" MinuteImage_rotate_yc="245" SecondHand_Image="hand_second.png" SecondImage_rotate_xc="96" SecondImage_rotate_yc="245"/>
+        <Widget Shape="30" Name="center_cap" Bitmap="center_cap.png" X="0" Y="0" Width="192" Height="490" Alpha="255" Visible_Src="0"/>
+    </Screen>
+</FaceProject>`;
+
+(async () => {
+  let xml = DEFAULT_FPRJ;
+  try {
+    const r = await fetch("AnalogFull.fprj");        // if opened over http — take the current file
+    if (r.ok) xml = await r.text();
+  } catch (e) { /* file:// — use the embedded copy */ }
+  boot(xml).catch(err => { meta.innerHTML = `<span class="warn">${err.message}</span>`; });
+})();
+</script>
